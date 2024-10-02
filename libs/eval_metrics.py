@@ -3,6 +3,7 @@ from datasets import Dataset
 import numpy as np
 import boto3
 from botocore.config import Config
+import re
 
 class AnswerRelevancy:
     def __init__(self, llm_id, emb_id, region, strictness=3):
@@ -241,9 +242,8 @@ class Faithfulness:
 
 
 class ContextRecall:
-    def __init__(self, llm_id, emb_id, region):
+    def __init__(self, llm_id, region):
         self.llm_id = llm_id
-        self.emb_id = emb_id
         self.region = region
         retry_config = Config(
             region_name=region,
@@ -264,9 +264,12 @@ class ContextRecall:
                                 "type": "object",
                                 "properties": {
                                     "attributed": {
-                                        "type": "integer",
-                                        "description": "binary values (0 or 1) indicating whether each statement is attributed to the context"
-
+                                        "type": "array",
+                                        "items": {
+                                            "type": "integer",
+                                            "enum": [0, 1]
+                                        },
+                                        "description": "Array of 0 (not attributed) or 1 (attributed) for each statement"
                                     }
                                 },
                                 "required": ["attributed"]
@@ -306,35 +309,44 @@ class ContextRecall:
             return results
         return None
 
-    def _create_context_recall_prompt(self, row):
+    def segment_paragraphs(self, text):
+        paragraphs = re.split(r'\n{2,}|\n', text.strip())
+        return [p.strip() for p in paragraphs if p.strip()]
+
+    def check_context_recall(self, contexts, reference):
         sys_template = """
-        Given a context, and an answer, analyze each sentence in the answer and classify if the sentence can be attributed to the given context or not. Use only "Yes" (1) or "No" (0) as a binary classification. Use the ContextRecallClassifier tool for each statement.
+        Given multiple contexts and a reference answer, analyze each statement in the reference and classify if it can be attributed to any of the given contexts.
         """
+        paragraphs = self.segment_paragraphs(reference)
+        paragraphs_str = '\n\n'.join([f"Paragraph {i+1}: {p}" for i, p in enumerate(paragraphs)])
+        contexts_str = '\n'.join([f"Context {i+1}: {c}" for i, c in enumerate(contexts)])
         user_template = f"""
-        Question: {row['user_input']}
-        Context: {row['retrieved_contexts']}
-        Answer: {row['reference']}
-        Use the ContextRecallClassifier tool for each statement in the answer.
+        Contexts:
+        {contexts_str}
+
+        Reference paragraphs:
+        {paragraphs_str}
+
+        Use the ContextRecallClassifier tool to evaluate each paragraph in the reference.
         """
-        return self.create_message_format(sys_template, user_template)
-
-    def _compute_score(self, response):
-        attributed = [item['attributed'] for item in response]
-        denom = len(attributed)
-        numerator = sum(attributed)
-        score = numerator / denom if denom > 0 else np.nan
-        return score
-
-    async def _ascore(self, row, callbacks):
-        sys_prompt, user_prompt = self._create_context_recall_prompt(row)
+        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
         response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
         output = self.parse_tool_use(response)
 
-        if not output:
-            return np.nan
+        if output and len(output) > 0:
+            return output[0]['attributed']
+        return []
 
-        return self._compute_score(output)
+    def score(self, row):
+        contexts = row['retrieved_contexts']
+        reference = row['reference']
+        attributed = self.check_context_recall(contexts, reference)
+        print(attributed)
+        if not attributed:
+            return 0.0
 
-    async def _single_turn_ascore(self, sample, callbacks):
-        row = sample.dict()
-        return await self._ascore(row, callbacks)
+        total_paragraphs = len(attributed)
+        attributed_paragraphs = sum(attributed)
+        score = attributed_paragraphs / total_paragraphs if total_paragraphs > 0 else 0.0
+
+        return score
