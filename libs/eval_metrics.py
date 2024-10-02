@@ -129,10 +129,10 @@ class AnswerRelevancy:
     def cosine_similarity(self, vec1, vec2):
         return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
+
 class Faithfulness:
-    def __init__(self, llm_id, emb_id, region):
+    def __init__(self, llm_id, region):
         self.llm_id = llm_id
-        self.emb_id = emb_id
         self.region = region
         retry_config = Config(
             region_name=region,
@@ -146,51 +146,22 @@ class Faithfulness:
             "tools": [
                 {
                     "toolSpec": {
-                        "name": "StatementGenerator",
-                        "description": "Generates simpler statements from paragraphs.",
+                        "name": "FaithfulnessChecker",
+                        "description": "Checks the faithfulness of paragraphs based on a given context.",
                         "inputSchema": {
                             "json": {
                                 "type": "object",
                                 "properties": {
-                                    "paragraph_index": {
-                                        "type": "integer",
-                                        "description": "The index of the original paragraph"
-                                    },
-                                    "simpler_statements": {
+                                    "verdicts": {
                                         "type": "array",
                                         "items": {
-                                            "type": "string"
+                                            "type": "integer",
+                                            "enum": [0, 1]
                                         },
-                                        "description": "An array of simpler statements derived from the original paragraph"
+                                        "description": "Array of 0 (not faithful) or 1 (faithful) for each paragraph"
                                     }
                                 },
-                                "required": ["paragraph_index", "simpler_statements"]
-                            }
-                        }
-                    }
-                },
-                {
-                    "toolSpec": {
-                        "name": "FaithfulnessChecker",
-                        "description": "Checks the faithfulness of statements based on a given context.",
-                        "inputSchema": {
-                            "json": {
-                                "type": "object",
-                                "properties": {
-                                    "statement": {
-                                        "type": "string",
-                                        "description": "The statement to check for faithfulness"
-                                    },
-                                    "reason": {
-                                        "type": "string",
-                                        "description": "The reason for the verdict"
-                                    },
-                                    "verdict": {
-                                        "type": "integer",
-                                        "description": "1 if the statement is faithful, 0 if not"
-                                    }
-                                },
-                                "required": ["statement", "reason", "verdict"]
+                                "required": ["verdicts"]
                             }
                         }
                     }
@@ -232,64 +203,138 @@ class Faithfulness:
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return paragraphs
 
-    def generate_statements(self, question, answer):
+    def check_faithfulness(self, context, user_input):
         sys_template = """
-        Given a question, an answer, and paragraphs from the answer, analyze each paragraph and break it down into one or more fully understandable statements while ensuring no pronouns are used in each statement. Use the StatementGenerator tool for each paragraph.
+        Your task is to judge the faithfulness of a series of paragraphs based on a given context. For each paragraph, determine if it can be directly inferred from the context..
         """
-        paragraphs = self.segment_paragraphs(answer)
-        paragraphs_str = '\n'.join([f"{i}: {p}" for i, p in enumerate(paragraphs)])
+        paragraphs = self.segment_paragraphs(user_input)
+        paragraphs_str = '\n\n'.join([f"Paragraph {i}:\n {p}" for i, p in enumerate(paragraphs)])
         user_template = f"""
-        Question: {question}
-        Answer: {answer}
+        Context: {context}
+
         Paragraphs:
         {paragraphs_str}
-        Use the StatementGenerator tool for each paragraph.
+
+        Use the FaithfulnessChecker tool to evaluate the given paragraphs.
         """
         sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
         response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
         output = self.parse_tool_use(response)
 
-        statements = []
-        if output:
-            for item in output:
-                statements.extend(item['simpler_statements'])
-        return statements
-
-    def check_faithfulness(self, context, statements):
-        sys_template = """
-        Your task is to judge the faithfulness of a series of statements based on given paragraphs. For each statement, use the FaithfulnessChecker tool to determine if the statement can be directly inferred from any of the paragraphs.
-        """
-        paragraphs = self.segment_paragraphs(context)
-        paragraphs_str = json.dumps(paragraphs, ensure_ascii=False)
-        statements_str = json.dumps(statements, ensure_ascii=False)
-        user_template = f"""
-        Paragraphs: {paragraphs_str}
-        Statements: {statements_str}
-        Use the FaithfulnessChecker tool for each statement.
-        """
-        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
-        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
-        output = self.parse_tool_use(response)
-
-        verdicts = []
-        if output:
-            for item in output:
-                verdicts.append(item['verdict'])
-        return verdicts
+        if output and len(output) > 0:
+            return output[0]['verdicts']
+        return []
 
     def score(self, row):
-        question = row['user_input']
-        answer = row['response']
-        context = '\n'.join(row['retrieved_contexts'])
-        statements = self.generate_statements(question, answer)
-        if not statements:
-            return 0.0
-
-        verdicts = self.check_faithfulness(context, statements)
+        context = row['retrieved_contexts']
+        user_input = row['response']
+        verdicts = self.check_faithfulness(context, user_input)
+        print(verdicts)
         if not verdicts:
             return 0.0
 
-        faithful_statements = sum(verdicts)
-        total_statements = len(verdicts)
-        score = faithful_statements / total_statements
+        faithful_paragraphs = sum(verdicts)
+        total_paragraphs = len(verdicts)
+        score = faithful_paragraphs / total_paragraphs
+
         return score
+
+
+class ContextRecall:
+    def __init__(self, llm_id, emb_id, region):
+        self.llm_id = llm_id
+        self.emb_id = emb_id
+        self.region = region
+        retry_config = Config(
+            region_name=region,
+            retries={"max_attempts": 10, "mode": "standard"}
+        )
+        self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
+        self.tool_config = self.init_tool()
+
+    def init_tool(self):
+        tool_config = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "ContextRecallClassifier",
+                        "description": "Classifies if a statement can be attributed to the given context.",
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {
+                                    "attributed": {
+                                        "type": "integer",
+                                        "description": "binary values (0 or 1) indicating whether each statement is attributed to the context"
+
+                                    }
+                                },
+                                "required": ["attributed"]
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+        return tool_config
+
+    def create_message_format(self, sys_template, user_template):
+        sys_prompt = [{"text": sys_template}]
+        usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
+        return sys_prompt, usr_prompt
+
+    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+        inference_config = {"temperature": 0.0, "topP": 0.1}
+        response = self.boto3_client.converse(
+            modelId=self.llm_id,
+            messages=usr_prompt,
+            system=sys_prompt,
+            toolConfig=self.tool_config,
+            inferenceConfig=inference_config
+        )
+        return response
+
+    def parse_tool_use(self, message):
+        stop_reason = message['stopReason']
+        if stop_reason == 'tool_use':
+            tool_requests = message['output']['message']['content']
+            results = []
+            for tool_request in tool_requests:
+                if 'toolUse' in tool_request:
+                    tool = tool_request['toolUse']
+                    results.append(tool['input'])
+            return results
+        return None
+
+    def _create_context_recall_prompt(self, row):
+        sys_template = """
+        Given a context, and an answer, analyze each sentence in the answer and classify if the sentence can be attributed to the given context or not. Use only "Yes" (1) or "No" (0) as a binary classification. Use the ContextRecallClassifier tool for each statement.
+        """
+        user_template = f"""
+        Question: {row['user_input']}
+        Context: {row['retrieved_contexts']}
+        Answer: {row['reference']}
+        Use the ContextRecallClassifier tool for each statement in the answer.
+        """
+        return self.create_message_format(sys_template, user_template)
+
+    def _compute_score(self, response):
+        attributed = [item['attributed'] for item in response]
+        denom = len(attributed)
+        numerator = sum(attributed)
+        score = numerator / denom if denom > 0 else np.nan
+        return score
+
+    async def _ascore(self, row, callbacks):
+        sys_prompt, user_prompt = self._create_context_recall_prompt(row)
+        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
+        output = self.parse_tool_use(response)
+
+        if not output:
+            return np.nan
+
+        return self._compute_score(output)
+
+    async def _single_turn_ascore(self, sample, callbacks):
+        row = sample.dict()
+        return await self._ascore(row, callbacks)
