@@ -5,6 +5,47 @@ import boto3
 from botocore.config import Config
 import re
 
+def evaluate(dataset, metrics, llm_id, emb_id, region):
+    """
+    Evaluate the dataset using the specified metrics.
+
+    Args:
+    dataset (List[Dict]): List of dictionaries containing 'user_input', 'response', and 'retrieved_contexts'.
+    metrics (List[Type]): List of metric classes to use for evaluation.
+    llm_id (str): ID of the LLM model to use.
+    emb_id (str): ID of the embeddings model to use.
+    region (str): AWS region to use for Bedrock.
+
+    Returns:
+    Dict: A dictionary containing the scores for each metric.
+    """
+    results = {}
+
+    for metric_class in metrics:
+        if issubclass(metric_class, AnswerRelevancy):
+            metric = metric_class(llm_id=llm_id, emb_id=emb_id, region=region)
+        elif issubclass(metric_class, (Faithfulness, ContextRecall, ContextPrecision)):
+            metric = metric_class(llm_id=llm_id, region=region)
+        else:
+            raise ValueError(f"Unsupported metric class: {metric_class.__name__}")
+
+        scores = []
+        for row in dataset:
+            try:
+                score = metric.score(row)
+                scores.append(score)
+            except Exception as e:
+                print(f"Error processing row: {e}")
+                continue
+
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            results[metric_class.__name__] = avg_score
+        else:
+            results[metric_class.__name__] = "No valid scores"
+
+    return results
+
 class AnswerRelevancy:
     def __init__(self, llm_id, emb_id, region, strictness=3):
         self.llm_id = llm_id
@@ -349,4 +390,126 @@ class ContextRecall:
         attributed_paragraphs = sum(attributed)
         score = attributed_paragraphs / total_paragraphs if total_paragraphs > 0 else 0.0
 
+        return score
+
+
+class ContextPrecision:
+    def __init__(self, llm_id: str, region: str):
+        self.llm_id = llm_id
+        self.region = region
+
+        retry_config = Config(
+            region_name=self.region,
+            retries={"max_attempts": 10, "mode": "standard"}
+        )
+        self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
+        self.tool_config = self.init_tool()
+
+    def init_tool(self):
+        tool_config = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "ContextPrecisionClassifier",
+                        "description": "Classifies if the given context was useful in arriving at the given answer.",
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {
+                                    "verdict": {
+                                        "type": "integer",
+                                        "enum": [0, 1],
+                                        "description": "0 if not useful, 1 if useful"
+                                    }
+                                },
+                                "required": ["verdict"]
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+        return tool_config
+
+    def create_message_format(self, sys_template, user_template):
+        sys_prompt = [{"text": sys_template}]
+        usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
+        return sys_prompt, usr_prompt
+
+    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+        inference_config = {"temperature": 0.0, "topP": 0.1}
+        response = self.boto3_client.converse(
+            modelId=self.llm_id,
+            messages=usr_prompt,
+            system=sys_prompt,
+            toolConfig=self.tool_config,
+            inferenceConfig=inference_config
+        )
+        return response
+
+    def parse_tool_use(self, message):
+        stop_reason = message['stopReason']
+        if stop_reason == 'tool_use':
+            tool_requests = message['output']['message']['content']
+            results = []
+            for tool_request in tool_requests:
+                if 'toolUse' in tool_request:
+                    tool = tool_request['toolUse']
+                    results.append(tool['input'])
+            return results
+        return None
+
+    def check_context_precision(self, question, context, answer):
+        sys_template = """
+        Given a question, answer, and context, verify if the context was useful in arriving at the given answer.
+        """
+        user_template = f"""
+        Question: {question}
+        Context: {context}
+        Answer: {answer}
+
+        Use the ContextPrecisionClassifier tool to evaluate if the context was useful for the answer.
+        """
+        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
+        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
+        output = self.parse_tool_use(response)
+
+        if output and len(output) > 0:
+            return output[0]['verdict']
+        return 0
+
+    def _calculate_average_precision(self, verifications):
+        # verdict_list contains the usefulness judgement for each context (1 or 0)
+        verdict_list = verifications
+        # denominator is the total number of useful contexts
+        # (a small value is added to prevent division by zero)
+        denominator = sum(verdict_list) + 1e-10
+        # numerator is the sum of precision at each position multiplied by its usefulness
+        numerator = sum(
+            [
+                (sum(verdict_list[: i + 1]) / (i + 1)) * verdict_list[i]
+                for i in range(len(verdict_list))
+            ]
+        )
+        # The final score is calculated as numerator / denominator
+        score = numerator / denominator
+
+        if np.isnan(score):
+            logger.warning(
+                "Invalid response format. Expected a list of dictionaries with keys 'verdict'"
+            )
+        return score
+
+    def score(self, row):
+        question = row['user_input']
+        contexts = row['retrieved_contexts']
+        answer = row['reference']
+
+        verifications = []
+        for context in contexts:
+            verdict = self.check_context_precision(question, context, answer)
+            verifications.append(verdict)
+        print(verifications)
+
+        score = self._calculate_average_precision(verifications)
         return score
