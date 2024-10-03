@@ -19,32 +19,45 @@ def evaluate(dataset, metrics, llm_id, emb_id, region):
     Returns:
     Dict: A dictionary containing the scores for each metric.
     """
-    results = {}
+    average_scores = {}
+    detailed_results = []
 
-    for metric_class in metrics:
-        if issubclass(metric_class, AnswerRelevancy):
-            metric = metric_class(llm_id=llm_id, emb_id=emb_id, region=region)
-        elif issubclass(metric_class, (Faithfulness, ContextRecall, ContextPrecision)):
-            metric = metric_class(llm_id=llm_id, region=region)
-        else:
-            raise ValueError(f"Unsupported metric class: {metric_class.__name__}")
 
-        scores = []
-        for row in dataset:
+    for i, row in enumerate(dataset):
+        row_result = {'row': i+1}
+        for metric_class in metrics:
+            if issubclass(metric_class, AnswerRelevancy):
+                metric = metric_class(llm_id=llm_id, emb_id=emb_id, region=region)
+            elif issubclass(metric_class, (Faithfulness, ContextRecall, ContextPrecision)):
+                metric = metric_class(llm_id=llm_id, region=region)
+            else:
+                raise ValueError(f"Unsupported metric class: {metric_class.__name__}")
+
             try:
                 score = metric.score(row)
-                scores.append(score)
+                print(f"{metric_class.__name__} - Row {i+1}: Score = {score}")
+                row_result[metric_class.__name__] = score
+
+                if metric_class.__name__ not in average_scores:
+                    average_scores[metric_class.__name__] = []
+                average_scores[metric_class.__name__].append(score)
+
             except Exception as e:
-                print(f"Error processing row: {e}")
-                continue
+                print(f"Error processing row {i+1} for {metric_class.__name__}: {e}")
+                row_result[metric_class.__name__] = None
 
+        detailed_results.append(row_result)
+
+    for metric, scores in average_scores.items():
         if scores:
-            avg_score = sum(scores) / len(scores)
-            results[metric_class.__name__] = avg_score
+            average_scores[metric] = sum(scores) / len(scores)
         else:
-            results[metric_class.__name__] = "No valid scores"
+            average_scores[metric] = "No valid scores"
 
-    return results
+    return {
+        'average_scores': average_scores,
+        'detailed_results': detailed_results
+    }
 
 class AnswerRelevancy:
     def __init__(self, llm_id, emb_id, region, strictness=3):
@@ -271,7 +284,7 @@ class Faithfulness:
         context = row['retrieved_contexts']
         user_input = row['response']
         verdicts = self.check_faithfulness(context, user_input)
-        print(verdicts)
+
         if not verdicts:
             return 0.0
 
@@ -354,7 +367,7 @@ class ContextRecall:
         paragraphs = re.split(r'\n{2,}|\n', text.strip())
         return [p.strip() for p in paragraphs if p.strip()]
 
-    def check_context_recall(self, contexts, reference):
+    def check_context_recall(self, user_input, contexts, reference):
         sys_template = """
         Given multiple contexts and a reference answer, analyze each statement in the reference and classify if it can be attributed to any of the given contexts.
         """
@@ -362,6 +375,9 @@ class ContextRecall:
         paragraphs_str = '\n\n'.join([f"Paragraph {i+1}: {p}" for i, p in enumerate(paragraphs)])
         contexts_str = '\n'.join([f"Context {i+1}: {c}" for i, c in enumerate(contexts)])
         user_template = f"""
+        Question:
+        {user_input}
+
         Contexts:
         {contexts_str}
 
@@ -379,10 +395,11 @@ class ContextRecall:
         return []
 
     def score(self, row):
+        user_input = row['user_input']
         contexts = row['retrieved_contexts']
         reference = row['reference']
-        attributed = self.check_context_recall(contexts, reference)
-        print(attributed)
+
+        attributed = self.check_context_recall(user_input, contexts, reference)
         if not attributed:
             return 0.0
 
@@ -509,7 +526,7 @@ class ContextPrecision:
         for context in contexts:
             verdict = self.check_context_precision(question, context, answer)
             verifications.append(verdict)
-        print(verifications)
+        #print(verifications)
 
         score = self._calculate_average_precision(verifications)
         return score
