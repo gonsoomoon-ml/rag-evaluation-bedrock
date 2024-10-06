@@ -70,9 +70,9 @@ class AnswerRelevancy:
             retries={"max_attempts": 10, "mode": "standard"}
         )
         self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
-        self.tool_config = self.init_tool()
+        self.tool_config = self._init_tool()
 
-    def init_tool(self):
+    def _init_tool(self):
         tool_config = {
             "tools": [
                 {
@@ -101,12 +101,12 @@ class AnswerRelevancy:
         }
         return tool_config
 
-    def create_message_format(self, sys_template, user_template):
+    def _create_message_format(self, sys_template, user_template):
         sys_prompt = [{"text": sys_template}]
         usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
         return sys_prompt, usr_prompt
 
-    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+    def _converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
         inference_config = {"temperature": 0.0, "topP": 0.1}
         response = self.boto3_client.converse(
             modelId=self.llm_id,
@@ -117,7 +117,7 @@ class AnswerRelevancy:
         )
         return response
 
-    def parse_tool_use(self, message):
+    def _parse_tool_use(self, message):
         stop_reason = message['stopReason']
 
         if stop_reason == 'tool_use':
@@ -130,7 +130,7 @@ class AnswerRelevancy:
                         return tool['input']
         return None
 
-    def generate_questions(self, answer, context):
+    def _generate_questions(self, answer, context):
         sys_template = """
         Generate a question for the given answer based on the given context and identify if the answer is noncommittal. 
         """
@@ -145,9 +145,9 @@ class AnswerRelevancy:
         noncommittals = []
 
         for _ in range(self.strictness):
-            sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
-            response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
-            output = self.parse_tool_use(response)          
+            sys_prompt, user_prompt = self._create_message_format(sys_template, user_template)
+            response = self._converse_with_bedrock_tools(sys_prompt, user_prompt)
+            output = self._parse_tool_use(response)          
             
             question = output['question']
             noncommittal = int(output['noncommittal'])
@@ -157,7 +157,7 @@ class AnswerRelevancy:
         
         return questions, noncommittals        
 
-    def get_embedding_vector(self, text):
+    def _get_embedding_vector(self, text):
         request = json.dumps({"inputText": text})
         response = self.boto3_client.invoke_model(modelId=self.emb_id, body=request)
         embedding = json.loads(response["body"].read())["embedding"]
@@ -169,19 +169,19 @@ class AnswerRelevancy:
         context = row['retrieved_contexts']
         context_str = '\n'.join(context)
 
-        generated_questions, noncommittals = self.generate_questions(answer, context_str)
+        generated_questions, noncommittals = self._generate_questions(answer, context_str)
 
-        user_input_vec = self.get_embedding_vector(user_input)
-        generated_vectors = [self.get_embedding_vector(q) for q in generated_questions]
+        user_input_vec = self._get_embedding_vector(user_input)
+        generated_vectors = [self._get_embedding_vector(q) for q in generated_questions]
         similarities = [
-            self.cosine_similarity(user_input_vec, vec) for vec in generated_vectors
+            self._cosine_similarity(user_input_vec, vec) for vec in generated_vectors
         ]
         avg_similarity = np.mean(similarities)
         is_committal = all(not nc for nc in noncommittals)
 
         return avg_similarity * (1 if is_committal else 0)
 
-    def cosine_similarity(self, vec1, vec2):
+    def _cosine_similarity(self, vec1, vec2):
         return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
 
@@ -194,9 +194,9 @@ class Faithfulness:
             retries={"max_attempts": 10, "mode": "standard"}
         )
         self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
-        self.tool_config = self.init_tool()
+        self.tool_config = self._init_tool()
 
-    def init_tool(self):
+    def _init_tool(self):
         tool_config = {
             "tools": [
                 {
@@ -225,12 +225,12 @@ class Faithfulness:
         }
         return tool_config
 
-    def create_message_format(self, sys_template, user_template):
+    def _create_message_format(self, sys_template, user_template):
         sys_prompt = [{"text": sys_template}]
         usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
         return sys_prompt, usr_prompt
 
-    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+    def _converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
         inference_config = {"temperature": 0.0, "topP": 0.1}
         response = self.boto3_client.converse(
             modelId=self.llm_id,
@@ -241,7 +241,7 @@ class Faithfulness:
         )
         return response
 
-    def parse_tool_use(self, message):
+    def _parse_tool_use(self, message):
         stop_reason = message['stopReason']
         if stop_reason == 'tool_use':
             tool_requests = message['output']['message']['content']
@@ -253,16 +253,16 @@ class Faithfulness:
             return results
         return None
 
-    def segment_paragraphs(self, text):
+    def _segment_paragraphs(self, text):
         paragraphs = text.split('\n\n')
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return paragraphs
 
-    def check_faithfulness(self, context, user_input):
+    def _check_faithfulness(self, context, user_input):
         sys_template = """
         Your task is to judge the faithfulness of a series of paragraphs based on a given context. For each paragraph, determine if it can be directly inferred from the context..
         """
-        paragraphs = self.segment_paragraphs(user_input)
+        paragraphs = self._segment_paragraphs(user_input)
         paragraphs_str = '\n\n'.join([f"Paragraph {i}:\n {p}" for i, p in enumerate(paragraphs)])
         user_template = f"""
         Context: {context}
@@ -272,9 +272,9 @@ class Faithfulness:
 
         Use the FaithfulnessChecker tool to evaluate the given paragraphs.
         """
-        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
-        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
-        output = self.parse_tool_use(response)
+        sys_prompt, user_prompt = self._create_message_format(sys_template, user_template)
+        response = self._converse_with_bedrock_tools(sys_prompt, user_prompt)
+        output = self._parse_tool_use(response)
 
         if output and len(output) > 0:
             return output[0]['verdicts']
@@ -283,7 +283,7 @@ class Faithfulness:
     def score(self, row):
         context = row['retrieved_contexts']
         user_input = row['response']
-        verdicts = self.check_faithfulness(context, user_input)
+        verdicts = self._check_faithfulness(context, user_input)
 
         if not verdicts:
             return 0.0
@@ -304,9 +304,9 @@ class ContextRecall:
             retries={"max_attempts": 10, "mode": "standard"}
         )
         self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
-        self.tool_config = self.init_tool()
+        self.tool_config = self._init_tool()
 
-    def init_tool(self):
+    def _init_tool(self):
         tool_config = {
             "tools": [
                 {
@@ -335,12 +335,12 @@ class ContextRecall:
         }
         return tool_config
 
-    def create_message_format(self, sys_template, user_template):
+    def _create_message_format(self, sys_template, user_template):
         sys_prompt = [{"text": sys_template}]
         usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
         return sys_prompt, usr_prompt
 
-    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+    def _converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
         inference_config = {"temperature": 0.0, "topP": 0.1}
         response = self.boto3_client.converse(
             modelId=self.llm_id,
@@ -351,7 +351,7 @@ class ContextRecall:
         )
         return response
 
-    def parse_tool_use(self, message):
+    def _parse_tool_use(self, message):
         stop_reason = message['stopReason']
         if stop_reason == 'tool_use':
             tool_requests = message['output']['message']['content']
@@ -363,15 +363,15 @@ class ContextRecall:
             return results
         return None
 
-    def segment_paragraphs(self, text):
+    def _segment_paragraphs(self, text):
         paragraphs = re.split(r'\n{2,}|\n', text.strip())
         return [p.strip() for p in paragraphs if p.strip()]
 
-    def check_context_recall(self, user_input, contexts, reference):
+    def _check_context_recall(self, user_input, contexts, reference):
         sys_template = """
         Given multiple contexts and a reference answer, analyze each statement in the reference and classify if it can be attributed to any of the given contexts.
         """
-        paragraphs = self.segment_paragraphs(reference)
+        paragraphs = self._segment_paragraphs(reference)
         paragraphs_str = '\n\n'.join([f"Paragraph {i+1}: {p}" for i, p in enumerate(paragraphs)])
         contexts_str = '\n'.join([f"Context {i+1}: {c}" for i, c in enumerate(contexts)])
         user_template = f"""
@@ -386,9 +386,9 @@ class ContextRecall:
 
         Use the ContextRecallClassifier tool to evaluate each paragraph in the reference.
         """
-        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
-        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
-        output = self.parse_tool_use(response)
+        sys_prompt, user_prompt = self._create_message_format(sys_template, user_template)
+        response = self._converse_with_bedrock_tools(sys_prompt, user_prompt)
+        output = self._parse_tool_use(response)
 
         if output and len(output) > 0:
             return output[0]['attributed']
@@ -399,7 +399,7 @@ class ContextRecall:
         contexts = row['retrieved_contexts']
         reference = row['reference']
 
-        attributed = self.check_context_recall(user_input, contexts, reference)
+        attributed = self._check_context_recall(user_input, contexts, reference)
         if not attributed:
             return 0.0
 
@@ -420,9 +420,9 @@ class ContextPrecision:
             retries={"max_attempts": 10, "mode": "standard"}
         )
         self.boto3_client = boto3.client("bedrock-runtime", config=retry_config)
-        self.tool_config = self.init_tool()
+        self.tool_config = self._init_tool()
 
-    def init_tool(self):
+    def _init_tool(self):
         tool_config = {
             "tools": [
                 {
@@ -448,12 +448,12 @@ class ContextPrecision:
         }
         return tool_config
 
-    def create_message_format(self, sys_template, user_template):
+    def _create_message_format(self, sys_template, user_template):
         sys_prompt = [{"text": sys_template}]
         usr_prompt = [{"role": "user", "content": [{"text": user_template}]}]
         return sys_prompt, usr_prompt
 
-    def converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
+    def _converse_with_bedrock_tools(self, sys_prompt, usr_prompt):
         inference_config = {"temperature": 0.0, "topP": 0.1}
         response = self.boto3_client.converse(
             modelId=self.llm_id,
@@ -464,7 +464,7 @@ class ContextPrecision:
         )
         return response
 
-    def parse_tool_use(self, message):
+    def _parse_tool_use(self, message):
         stop_reason = message['stopReason']
         if stop_reason == 'tool_use':
             tool_requests = message['output']['message']['content']
@@ -476,7 +476,7 @@ class ContextPrecision:
             return results
         return None
 
-    def check_context_precision(self, question, context, answer):
+    def _check_context_precision(self, question, context, answer):
         sys_template = """
         Given a question, answer, and context, verify if the context was useful in arriving at the given answer.
         """
@@ -487,9 +487,9 @@ class ContextPrecision:
 
         Use the ContextPrecisionClassifier tool to evaluate if the context was useful for the answer.
         """
-        sys_prompt, user_prompt = self.create_message_format(sys_template, user_template)
-        response = self.converse_with_bedrock_tools(sys_prompt, user_prompt)
-        output = self.parse_tool_use(response)
+        sys_prompt, user_prompt = self._create_message_format(sys_template, user_template)
+        response = self._converse_with_bedrock_tools(sys_prompt, user_prompt)
+        output = self._parse_tool_use(response)
 
         if output and len(output) > 0:
             return output[0]['verdict']
@@ -524,7 +524,7 @@ class ContextPrecision:
 
         verifications = []
         for context in contexts:
-            verdict = self.check_context_precision(question, context, answer)
+            verdict = self._check_context_precision(question, context, answer)
             verifications.append(verdict)
         #print(verifications)
 

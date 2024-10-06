@@ -10,7 +10,7 @@ ipython_config.py
 #   git rm -r .ipynb_checkpoints/
 
 # Data directory
-data/
+data/*.pdf
 
 # Python
 __pycache__/

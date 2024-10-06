@@ -32,6 +32,7 @@ While relying on existing RAGAS evaluation metrics and calculation methods, the 
 - Changes asynchronous LLM calls to synchronous to avoid API throttling when dealing with large Q&A test sets
 - Modifies segment separation for Faithfulness and Recall calculations from sentence-based (`.endswith(".")`) to paragraph-based (`'\n\n'`) for better context continuity
 - Simplifies the Faithfulness calculation by removing the statement simplification and reason generation steps to reduce token usage and processing time
+- The `libs/custom_ragas.py` file contains the custom implementation of the RAGAS evaluation metrics. It includes the modifications mentioned above.
 
 Here's a brief overview of what each metric measures:
 
@@ -48,3 +49,34 @@ Assesses how well the retrieved context matches the LLM-generated answer. It seg
 Evaluates how relevant documents are ranked in the retrieved context. It uses an LLM to judge the usefulness of each context in the list for answer generation, with higher weights given to useful contexts appearing earlier in the list.
 
 These modifications aim to improve evaluation accuracy, reduce processing time, and optimize resource usage while maintaining the core principles of the RAGAS evaluation framework.
+
+## 03-llm-as-a-judge.ipynb
+
+This notebook demonstrates the concept of using an LLM as a judge for evaluating RAG quality. 
+It imports and utilizes the custom implementation from `libs/custom_llm_as_a_judge.py`.
+
+### LLM-as-a-Judge Approach
+
+The LLM-as-a-Judge method allows for automated evaluation of RAG outputs based on predefined criteria. This approach can be particularly useful for:
+
+1. Rapid iteration in LLM application development
+2. Reducing the need for extensive human evaluation
+3. Providing consistent evaluation across large datasets
+
+### Evaluation Criteria
+
+The notebook showcases how to evaluate the quality of Q&A based on criteria such as:
+
+- Conciseness
+- Relevance
+- Correctness
+- Coherence
+- Helpfulness
+...
+
+
+## 📚 Reference
+
+- [RAGAS] (https://github.com/explodinggradients/ragas)
+- [langchain-ai](https://github.com/langchain-ai/langchain) 
+- [langchain-kr](https://github.com/teddylee777/langchain-kr) 

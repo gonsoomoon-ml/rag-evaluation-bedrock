@@ -1,0 +1,80 @@
+{
+    "average_scores": {
+        "AnswerRelevancy": 0.8171414896224307,
+        "Faithfulness": 0.93,
+        "ContextRecall": 0.6666666666666667,
+        "ContextPrecision": 0.74166666662875
+    },
+    "detailed_results": [
+        {
+            "row": 1,
+            "AnswerRelevancy": 0.9935753761915871,
+            "Faithfulness": 1.0,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.99999999995
+        },
+        {
+            "row": 2,
+            "AnswerRelevancy": 0.9555223741226829,
+            "Faithfulness": 1.0,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.5833333333041666
+        },
+        {
+            "row": 3,
+            "AnswerRelevancy": 0.0,
+            "Faithfulness": 0.8,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.99999999995
+        },
+        {
+            "row": 4,
+            "AnswerRelevancy": 0.9703884056328702,
+            "Faithfulness": 1.0,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.9999999999666667
+        },
+        {
+            "row": 5,
+            "AnswerRelevancy": 0.9435156482538608,
+            "Faithfulness": 1.0,
+            "ContextRecall": 0.4166666666666667,
+            "ContextPrecision": 0.49999999995
+        },
+        {
+            "row": 6,
+            "AnswerRelevancy": 0.9450458191485934,
+            "Faithfulness": 1.0,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.9999999999666667
+        },
+        {
+            "row": 7,
+            "AnswerRelevancy": 0.7862712555940686,
+            "Faithfulness": 1.0,
+            "ContextRecall": 0.0,
+            "ContextPrecision": 0.0
+        },
+        {
+            "row": 8,
+            "AnswerRelevancy": 0.9868286530732191,
+            "Faithfulness": 1.0,
+            "ContextRecall": 1.0,
+            "ContextPrecision": 0.99999999995
+        },
+        {
+            "row": 9,
+            "AnswerRelevancy": 0.7703079397673008,
+            "Faithfulness": 0.5,
+            "ContextRecall": 0.25,
+            "ContextPrecision": 0.99999999995
+        },
+        {
+            "row": 10,
+            "AnswerRelevancy": 0.8199594244401246,
+            "Faithfulness": 1.0,
+            "ContextRecall": 0.0,
+            "ContextPrecision": 0.3333333333
+        }
+    ]
+}
