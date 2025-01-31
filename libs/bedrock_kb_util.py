@@ -40,3 +40,4 @@ def context_retrieval_from_kb(prompt, top_k, region, kb_id, search_type):
     prompt_new = f"Here is some context for you: \n<context>\n{context}</context>\n\n{prompt}"
 
     return search_result
+

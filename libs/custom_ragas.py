@@ -5,7 +5,7 @@ import boto3
 from botocore.config import Config
 import re
 
-def evaluate(dataset, metrics, llm_id, emb_id, region):
+def evaluate(dataset, metrics, llm_id, emb_id, region, verbose=False):
     """
     Evaluate the dataset using the specified metrics.
 
@@ -24,6 +24,9 @@ def evaluate(dataset, metrics, llm_id, emb_id, region):
 
 
     for i, row in enumerate(dataset):
+        if verbose:
+            print("## row\n", row)
+
         row_result = {'row': i+1}
         for metric_class in metrics:
             if issubclass(metric_class, AnswerRelevancy):
@@ -34,7 +37,8 @@ def evaluate(dataset, metrics, llm_id, emb_id, region):
                 raise ValueError(f"Unsupported metric class: {metric_class.__name__}")
 
             try:
-                score = metric.score(row)
+                # score = metric.score(row)
+                score = metric.score(row, verbose=verbose)
                 print(f"{metric_class.__name__} - Row {i+1}: Score = {score}")
                 row_result[metric_class.__name__] = score
 
@@ -163,7 +167,7 @@ class AnswerRelevancy:
         embedding = json.loads(response["body"].read())["embedding"]
         return embedding
 
-    def score(self, row):
+    def score(self, row, verbose=False):
         user_input = row['user_input']
         answer = row['response']
         context = row['retrieved_contexts']
@@ -258,12 +262,18 @@ class Faithfulness:
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return paragraphs
 
-    def _check_faithfulness(self, context, user_input):
+    def _check_faithfulness(self, context, user_input, verbose=False):
+        '''
+        faithfulness 의 알고리즘은 아래의 1번, 2번을 Tool "FaithfulnessChecker" 에게 제공해서,  1 번과 2번이 Faithfull 하면 1, 그렇지 않으면 0 을 제공함.
+        1. LLM 으로 부터의 답변을 paragraphs 으로 분리한다.
+        2. 제공된 Context
+        '''
         sys_template = """
         Your task is to judge the faithfulness of a series of paragraphs based on a given context. For each paragraph, determine if it can be directly inferred from the context..
         """
-        paragraphs = self._segment_paragraphs(user_input)
+        paragraphs = self._segment_paragraphs(user_input) # generated_answer
         paragraphs_str = '\n\n'.join([f"Paragraph {i}:\n {p}" for i, p in enumerate(paragraphs)])
+
         user_template = f"""
         Context: {context}
 
@@ -276,14 +286,27 @@ class Faithfulness:
         response = self._converse_with_bedrock_tools(sys_prompt, user_prompt)
         output = self._parse_tool_use(response)
 
+        if verbose:
+            print("## _check_faithfulness")
+            print("# sys_prompt: \n", sys_prompt)
+            print("# user_prompt: \n", user_prompt)
+            print("# total response from LLM: \n", response)
+            print("# tool's output with FaithfulnessChecker: \n", output)
+
         if output and len(output) > 0:
             return output[0]['verdicts']
         return []
 
-    def score(self, row):
-        context = row['retrieved_contexts']
-        user_input = row['response']
-        verdicts = self._check_faithfulness(context, user_input)
+    def score(self, row, verbose=False):
+        context = row['retrieved_contexts'] # retrieved_contexts
+        user_input = row['response'] # generated_answert
+        verdicts = self._check_faithfulness(context, user_input, verbose=False)
+        # verdicts = self._check_faithfulness(context, user_input, verbose=True)
+
+        if verbose:
+            print("## retrieved_contexts: \n", context)
+            print("## generated_answer: \n", user_input)            
+            print("## verdicts: \n", verdicts)
 
         if not verdicts:
             return 0.0
@@ -394,7 +417,7 @@ class ContextRecall:
             return output[0]['attributed']
         return []
 
-    def score(self, row):
+    def score(self, row, verbose=False):
         user_input = row['user_input']
         contexts = row['retrieved_contexts']
         reference = row['reference']
@@ -517,7 +540,7 @@ class ContextPrecision:
             )
         return score
 
-    def score(self, row):
+    def score(self, row, verbose=False):
         question = row['user_input']
         contexts = row['retrieved_contexts']
         answer = row['reference']
